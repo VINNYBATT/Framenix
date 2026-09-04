@@ -60,14 +60,18 @@ not a rewrite of the engines that use it.
 
 ## Landing page
 
-`public/index.html` — served at `/` via a rewrite in `next.config.js`. It's
-a standalone, single-file cinematic page (inline CSS/JS, no build step, no
-React) built to the exact geometry, typography, color and motion spec in
-the master prompt. The product itself lives under `/studio`.
+`public/index.html` — served at `/` via a rewrite in `next.config.js`. A
+standalone, single-file cinematic page (inline CSS/JS, no build step, no
+React). The product itself lives under `/studio`.
 
-The partner-strip marks and the `IpsumMark` wordmark font are geometric
-placeholders — the original assets weren't available, so simple abstract
-marks and a bold Manrope fallback stand in, as the spec allows.
+The hero is a full-bleed video of a figure walking toward an illuminated
+door — the platform's one visual anchor, preserved as-is. Everything
+around it (copy, nav, sections) is FrameNix's own: no template branding,
+no fictional partners/logos, no invented stats. Below the fold covers the
+product story (what a reference becomes, how the pipeline works, what
+makes it different, repurposing, long-form, the automation vision) with a
+real, empty "Resultados" placeholder instead of fabricated numbers, and
+"AI Live" explicitly labeled as not built yet.
 
 ## Running locally
 
