@@ -1,0 +1,396 @@
+// FrameNix data model.
+//
+// This schema is deliberately wider than what Phase 1 executes end-to-end.
+// It exists so every future engine (production, transformation, repurposing)
+// has a home to write into without a migration that reshapes the core
+// pipeline. See section 8 of the FrameNix master prompt for the philosophy:
+// design for the full lifecycle, not just the first demo.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ── Identity ──────────────────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  projects Project[]
+
+  @@map("users")
+}
+
+// ── Project: the top-level container for one creative effort ───────────────
+
+model Project {
+  id        String   @id @default(cuid())
+  title     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  // The pipeline stage the project has reached. Advances one step at a time
+  // through the Phase 1 workflow described in section 6.
+  stage ProjectStage @default(INPUT)
+
+  intents         Intent[]
+  references      Reference[]
+  patternSets     PatternSet[]
+  blueprints      Blueprint[]
+  assets          Asset[]
+  productions     Production[]
+  transformations Transformation[]
+  repurposingJobs RepurposingJob[]
+
+  @@map("projects")
+}
+
+enum ProjectStage {
+  INPUT // user has supplied an idea, reference, video, URL or objective
+  RESEARCHING // research engine is discovering references
+  ANALYZING // video analysis engine is inspecting references
+  PATTERN_EXTRACTION // pattern discovery engine is synthesizing findings
+  BLUEPRINT // blueprint engine has produced (or is producing) a plan
+  REVIEW // blueprint is presented to the user for confirmation
+  PRODUCTION // production engine is executing the blueprint
+  DONE
+}
+
+// ── Intent: what the user is actually trying to accomplish ─────────────────
+
+model Intent {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  // Raw input as supplied by the user: an idea, a URL, a description, etc.
+  rawInput String
+
+  // Structured interpretation produced by the Intent Engine.
+  goal       String? // e.g. "recreate a visual style", "transform long-form into Shorts"
+  audience   String?
+  platform   String? // target platform, if known (YouTube Shorts, TikTok, Reels, ...)
+  objective  String?
+  confidence Float? // 0..1, how confident the Intent Engine is in this reading
+
+  // Full structured payload as returned by the AI provider, kept for
+  // traceability and so the schema doesn't need to change as the Intent
+  // Engine's output shape evolves.
+  raw Json?
+
+  @@map("intents")
+}
+
+// ── Reference: an audiovisual source the platform knows about ──────────────
+
+model Reference {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  source ReferenceSource // where it came from
+  url    String? // canonical URL (e.g. YouTube watch URL)
+
+  title       String?
+  channel     String?
+  publishedAt DateTime?
+  durationSec Int?
+  thumbnailUrl String?
+
+  // Raw metadata from the research provider (e.g. YouTube Data API item).
+  metadata Json?
+
+  analysis AnalysisResult?
+
+  @@map("references")
+}
+
+enum ReferenceSource {
+  USER_PROVIDED
+  YOUTUBE_SEARCH
+  YOUTUBE_URL
+  UPLOAD
+}
+
+// ── Analysis: structured understanding of one reference ────────────────────
+
+model AnalysisResult {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  referenceId String    @unique
+  reference   Reference @relation(fields: [referenceId], references: [id], onDelete: Cascade)
+
+  status AnalysisStatus @default(PENDING)
+  error  String?
+
+  // Structured dimensions produced by the Video Analysis Engine — see
+  // section 4 ("Video Analysis Engine") for the full list this maps to:
+  // scene structure, cuts, pacing, framing, camera movement, transitions,
+  // captions, visual hierarchy, color, audio, hooks, narrative structure.
+  structure Json? // scenes/cuts/shot-duration breakdown
+  pacing    Json?
+  visual    Json? // framing, camera movement, color, lighting
+  audio     Json? // music, voice, sound design
+  captions  Json? // on-screen text, placement, style
+  narrative Json? // hook, arc, payoff
+  summary   String?
+
+  modelUsed String? // which Gemini model produced this analysis
+
+  @@map("analysis_results")
+}
+
+enum AnalysisStatus {
+  PENDING
+  RUNNING
+  COMPLETE
+  FAILED
+}
+
+// ── Patterns: findings that recur across multiple references ───────────────
+
+model PatternSet {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  status AnalysisStatus @default(PENDING)
+
+  patterns Pattern[]
+
+  @@map("pattern_sets")
+}
+
+model Pattern {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  patternSetId String
+  patternSet   PatternSet @relation(fields: [patternSetId], references: [id], onDelete: Cascade)
+
+  category    PatternCategory
+  label       String // short human-readable name for the pattern
+  description String
+  evidence    Json? // which references/timestamps support this pattern
+  strength    Float? // 0..1, how consistently this pattern recurs
+
+  @@map("patterns")
+}
+
+enum PatternCategory {
+  HOOK
+  PACING
+  STRUCTURE
+  VISUAL
+  CAPTION
+  AUDIO
+  NARRATIVE
+  FORMAT
+}
+
+// ── Blueprint: an executable production plan ────────────────────────────────
+
+model Blueprint {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  version   Int      @default(1)
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  status BlueprintStatus @default(DRAFT)
+
+  concept      String?
+  objective    String?
+  targetFormat String? // e.g. "YouTube Short", "TikTok", "16:9 long-form"
+  durationSec  Int?
+
+  narrative Json? // narrative beats / arc
+  voice     Json?
+  music     Json?
+  captionsPlan Json?
+  visualDirection String? @db.Text
+
+  scenes Scene[]
+
+  productions Production[]
+
+  @@map("blueprints")
+}
+
+enum BlueprintStatus {
+  DRAFT
+  APPROVED
+  IN_PRODUCTION
+  ARCHIVED
+}
+
+model Scene {
+  id        String @id @default(cuid())
+  order     Int
+
+  blueprintId String
+  blueprint   Blueprint @relation(fields: [blueprintId], references: [id], onDelete: Cascade)
+
+  title       String?
+  description String?
+  durationSec Int?
+
+  shots Shot[]
+
+  @@map("scenes")
+}
+
+model Shot {
+  id    String @id @default(cuid())
+  order Int
+
+  sceneId String
+  scene   Scene  @relation(fields: [sceneId], references: [id], onDelete: Cascade)
+
+  description  String?
+  cameraNotes  String?
+  durationSec  Int?
+  transition   String?
+
+  assets Asset[]
+
+  @@map("shots")
+}
+
+// ── Assets: anything generated, uploaded or reused for production ──────────
+
+model Asset {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  shotId String?
+  shot   Shot?   @relation(fields: [shotId], references: [id], onDelete: SetNull)
+
+  type   AssetType
+  status AssetStatus @default(PENDING)
+
+  url         String?
+  provider    String? // which generation provider produced this asset
+  prompt      String?
+  metadata    Json?
+
+  @@map("assets")
+}
+
+enum AssetType {
+  IMAGE
+  VIDEO
+  VOICE
+  MUSIC
+  CAPTION_TRACK
+  UPLOAD
+}
+
+enum AssetStatus {
+  PENDING
+  GENERATING
+  READY
+  FAILED
+}
+
+// ── Production: execution of a blueprint ────────────────────────────────────
+
+model Production {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  blueprintId String
+  blueprint   Blueprint @relation(fields: [blueprintId], references: [id], onDelete: Cascade)
+
+  status ProductionStatus @default(QUEUED)
+  log    Json?
+
+  outputs Output[]
+
+  @@map("productions")
+}
+
+enum ProductionStatus {
+  QUEUED
+  RUNNING
+  COMPLETE
+  FAILED
+}
+
+model Output {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  productionId String
+  production   Production @relation(fields: [productionId], references: [id], onDelete: Cascade)
+
+  url      String?
+  platform String? // where this output is intended for
+  format   String?
+  metadata Json?
+
+  @@map("outputs")
+}
+
+// ── Transformation: an existing piece of content adapted into another form ─
+
+model Transformation {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  sourceUrl String
+  kind      String // e.g. "long-to-shorts", "restyle", "reformat", "localize"
+  status    ProductionStatus @default(QUEUED)
+
+  outputUrl String?
+  metadata  Json?
+
+  @@map("transformations")
+}
+
+// ── Repurposing: one source treated as a producer of many outputs ──────────
+
+model RepurposingJob {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  sourceUrl String
+  status    ProductionStatus @default(QUEUED)
+
+  // Each target is one adaptation of the source (platform + format), e.g.
+  // { platform: "tiktok", format: "9:16 clip", outputUrl: "..." }
+  targets Json?
+
+  @@map("repurposing_jobs")
+}
